@@ -1,0 +1,89 @@
+services:
+  envoy:
+    image: envoyproxy/envoy:v1.31-latest
+    volumes:
+      - ./envoy/envoy.e2e.yaml:/etc/envoy/envoy.yaml:ro
+      - ./target/wasm32-unknown-unknown/release/adaptive_concurrency_wasm.wasm:/etc/envoy/adaptive_concurrency_wasm.wasm:ro
+    ports:
+      - "10000:10000"
+      - "9901:9901"
+    command: >
+      envoy -c /etc/envoy/envoy.yaml
+      --log-level info
+      --component-log-level wasm:debug
+    depends_on:
+      - upstream-1
+      - upstream-2
+      - upstream-3
+      - upstream-4
+      - upstream-5
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9901/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  upstream-1:
+    image: python:3.12-slim
+    volumes:
+      - ./envoy/upstream-server.py:/app/server.py:ro
+    command: python /app/server.py
+    ports:
+      - "18081:8081"
+    environment:
+      - PORT=8080
+      - CONTROL_PORT=8081
+      - LATENCY_MS=5
+      - SERVER_NAME=upstream-1
+
+  upstream-2:
+    image: python:3.12-slim
+    volumes:
+      - ./envoy/upstream-server.py:/app/server.py:ro
+    command: python /app/server.py
+    ports:
+      - "18082:8081"
+    environment:
+      - PORT=8080
+      - CONTROL_PORT=8081
+      - LATENCY_MS=5
+      - SERVER_NAME=upstream-2
+
+  upstream-3:
+    image: python:3.12-slim
+    volumes:
+      - ./envoy/upstream-server.py:/app/server.py:ro
+    command: python /app/server.py
+    ports:
+      - "18083:8081"
+    environment:
+      - PORT=8080
+      - CONTROL_PORT=8081
+      - LATENCY_MS=5
+      - SERVER_NAME=upstream-3
+
+  upstream-4:
+    image: python:3.12-slim
+    volumes:
+      - ./envoy/upstream-server.py:/app/server.py:ro
+    command: python /app/server.py
+    ports:
+      - "18084:8081"
+    environment:
+      - PORT=8080
+      - CONTROL_PORT=8081
+      - LATENCY_MS=5
+      - SERVER_NAME=upstream-4
+
+  upstream-5:
+    image: python:3.12-slim
+    volumes:
+      - ./envoy/upstream-server.py:/app/server.py:ro
+    command: python /app/server.py
+    ports:
+      - "18085:8081"
+    environment:
+      - PORT=8080
+      - CONTROL_PORT=8081
+      - LATENCY_MS=5
+      - SERVER_NAME=upstream-5

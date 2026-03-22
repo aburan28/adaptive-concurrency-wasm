@@ -1,0 +1,19 @@
+[package]
+name = "adaptive-concurrency-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "Per-host adaptive concurrency WASM filter for Envoy using Gradient2 algorithm"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+proxy-wasm = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "debuginfo"

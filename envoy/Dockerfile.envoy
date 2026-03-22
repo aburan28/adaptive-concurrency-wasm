@@ -1,0 +1,6 @@
+FROM envoyproxy/envoy:v1.31-latest
+
+COPY envoy.yaml /etc/envoy/envoy.yaml
+COPY ../target/wasm32-unknown-unknown/release/adaptive_concurrency_wasm.wasm /etc/envoy/adaptive_concurrency_wasm.wasm
+
+ENTRYPOINT ["/usr/local/bin/envoy", "-c", "/etc/envoy/envoy.yaml", "--log-level", "info", "--component-log-level", "wasm:debug"]
