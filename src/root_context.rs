@@ -66,8 +66,9 @@ impl RootContext for AdaptiveConcurrencyRoot {
     fn on_tick(&mut self) {
         let now = self.now_ns();
         let mut shared = self.shared.borrow_mut();
-        shared.recalculate_all_limits();
-        shared.update_overloaded_set();
+        shared.recalculate_all_limits(now);
+        shared.update_overloaded_set(now);
+        shared.compute_adaptive_timeout();
         shared.expire_stale_hosts(now);
         stats::log_summary(&shared);
     }

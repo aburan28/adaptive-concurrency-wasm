@@ -63,6 +63,7 @@ static_resources:
                               "overload_gradient_threshold": 0.7,
                               "recovery_gradient_threshold": 0.95,
                               "min_rtt_probe_count": 10,
+                              "recovery_timeout_secs": 8,
                               "dry_run": false
                             }
                         vm_config:

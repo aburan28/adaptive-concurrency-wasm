@@ -32,9 +32,6 @@ pub struct PluginConfig {
     #[serde(default = "default_host_expiry_secs")]
     pub host_expiry_secs: u64,
 
-    #[serde(default = "default_overload_response_code")]
-    pub overload_response_code: u32,
-
     #[serde(default)]
     pub dry_run: bool,
 
@@ -49,6 +46,10 @@ pub struct PluginConfig {
     /// Minimum number of probe samples before computing minRTT
     #[serde(default = "default_min_rtt_probe_count")]
     pub min_rtt_probe_count: usize,
+
+    /// Seconds after which an overloaded host with no new samples gets reset
+    #[serde(default = "default_recovery_timeout_secs")]
+    pub recovery_timeout_secs: u64,
 }
 
 fn default_initial_limit() -> u32 { 100 }
@@ -61,10 +62,10 @@ fn default_sample_percentile() -> f64 { 0.9 }
 fn default_max_gradient() -> f64 { 2.0 }
 fn default_tick_period_ms() -> u64 { 1000 }
 fn default_host_expiry_secs() -> u64 { 300 }
-fn default_overload_response_code() -> u32 { 503 }
 fn default_overload_gradient_threshold() -> f64 { 0.7 }
 fn default_recovery_gradient_threshold() -> f64 { 0.95 }
 fn default_min_rtt_probe_count() -> usize { 25 }
+fn default_recovery_timeout_secs() -> u64 { 10 }
 
 impl Default for PluginConfig {
     fn default() -> Self {
@@ -79,11 +80,11 @@ impl Default for PluginConfig {
             max_gradient: default_max_gradient(),
             tick_period_ms: default_tick_period_ms(),
             host_expiry_secs: default_host_expiry_secs(),
-            overload_response_code: default_overload_response_code(),
             dry_run: false,
             overload_gradient_threshold: default_overload_gradient_threshold(),
             recovery_gradient_threshold: default_recovery_gradient_threshold(),
             min_rtt_probe_count: default_min_rtt_probe_count(),
+            recovery_timeout_secs: default_recovery_timeout_secs(),
         }
     }
 }

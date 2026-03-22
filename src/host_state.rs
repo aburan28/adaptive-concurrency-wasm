@@ -14,6 +14,7 @@ pub struct HostState {
     pub probe_samples: Vec<u64>,
     pub last_seen_ns: u64,
     pub is_overloaded: bool,
+    pub overloaded_since_ns: u64,
     pub last_gradient: f64,
     pub total_requests: u64,
     pub total_limited: u64,
@@ -31,15 +32,11 @@ impl HostState {
             probe_samples: Vec::new(),
             last_seen_ns: now_ns,
             is_overloaded: false,
+            overloaded_since_ns: 0,
             last_gradient: 1.0,
             total_requests: 0,
             total_limited: 0,
         }
-    }
-
-    pub fn record_request_start(&mut self) {
-        self.in_flight = self.in_flight.saturating_add(1);
-        self.total_requests += 1;
     }
 
     pub fn record_request_end(&mut self, latency_ns: u64, now_ns: u64) {
@@ -62,8 +59,7 @@ impl HostState {
     }
 
     /// Recalculate the concurrency limit using Gradient2.
-    /// Returns the result for logging purposes.
-    pub fn recalculate_limit(&mut self, config: &PluginConfig) -> Option<Gradient2Result> {
+    pub fn recalculate_limit(&mut self, config: &PluginConfig, now_ns: u64) -> Option<Gradient2Result> {
         if self.latency_samples.is_empty() {
             return None;
         }
@@ -97,34 +93,31 @@ impl HostState {
 
         // Update overload status based on gradient
         if result.gradient < config.overload_gradient_threshold {
+            if !self.is_overloaded {
+                self.overloaded_since_ns = now_ns;
+            }
             self.is_overloaded = true;
         } else if result.gradient > config.recovery_gradient_threshold {
             self.is_overloaded = false;
         }
 
-        // Track minRTT recalculation schedule
         self.windows_since_min_rtt += 1;
 
         Some(result)
     }
 
-    /// Start a minRTT probe window. Temporarily reduces traffic to measure baseline latency.
     pub fn start_min_rtt_probe(&mut self) {
         self.is_probing_min_rtt = true;
         self.probe_samples.clear();
     }
 
-    /// Finish minRTT probe and update the baseline.
     pub fn finish_min_rtt_probe(&mut self, config: &PluginConfig) {
         if !self.probe_samples.is_empty() {
             self.probe_samples.sort_unstable();
-            // Use the minimum observed latency during probe as the ideal RTT
             let probed_rtt = gradient2::percentile(&self.probe_samples, config.sample_percentile);
-            // Only update if we got a valid measurement
             if probed_rtt > 0 {
                 match self.min_rtt_ns {
                     Some(existing) => {
-                        // Exponentially weighted: keep 80% old, 20% new
                         self.min_rtt_ns =
                             Some(((existing as f64 * 0.8) + (probed_rtt as f64 * 0.2)) as u64);
                     }
@@ -153,6 +146,9 @@ pub struct SharedState {
     pub config: PluginConfig,
     pub hosts: HashMap<String, HostState>,
     pub overloaded_hosts: HashSet<String>,
+    /// Adaptive per-try timeout in ms, computed from healthy host latencies.
+    /// 0 means no override (use Envoy's default).
+    pub adaptive_per_try_timeout_ms: u64,
 }
 
 impl SharedState {
@@ -161,6 +157,7 @@ impl SharedState {
             config,
             hosts: HashMap::new(),
             overloaded_hosts: HashSet::new(),
+            adaptive_per_try_timeout_ms: 0,
         }
     }
 
@@ -172,8 +169,7 @@ impl SharedState {
     }
 
     /// Recalculate limits for all hosts with enough samples.
-    /// Also manages minRTT probe lifecycle.
-    pub fn recalculate_all_limits(&mut self) {
+    pub fn recalculate_all_limits(&mut self, now_ns: u64) {
         let config = self.config.clone();
         for (addr, host) in self.hosts.iter_mut() {
             // Handle minRTT probe completion
@@ -190,7 +186,7 @@ impl SharedState {
             // Recalculate limit if we have enough samples
             if host.has_enough_samples(config.sample_window_size) {
                 let old_limit = host.current_limit;
-                if let Some(result) = host.recalculate_limit(&config) {
+                if let Some(result) = host.recalculate_limit(&config, now_ns) {
                     if old_limit != result.new_limit {
                         log::info!(
                             "adaptive_concurrency: host {} limit {} -> {} (gradient={:.3})",
@@ -202,7 +198,6 @@ impl SharedState {
                     }
                 }
 
-                // Check if it is time to start a minRTT probe
                 if host.should_start_probe(config.min_rtt_recalc_windows) {
                     host.start_min_rtt_probe();
                     log::info!(
@@ -214,17 +209,71 @@ impl SharedState {
         }
     }
 
-    /// Rebuild the overloaded hosts set from current host states.
-    pub fn update_overloaded_set(&mut self) {
+    /// Rebuild the overloaded hosts set. Also handles time-based recovery:
+    /// if a host has been overloaded for longer than recovery_timeout without
+    /// getting new samples, reset it to allow re-probing.
+    pub fn update_overloaded_set(&mut self, now_ns: u64) {
+        let recovery_ns = self.config.recovery_timeout_secs * 1_000_000_000;
+
         self.overloaded_hosts.clear();
-        for (addr, host) in &self.hosts {
+        for (addr, host) in self.hosts.iter_mut() {
             if host.is_overloaded {
-                self.overloaded_hosts.insert(addr.clone());
+                // Time-based recovery: if overloaded too long, reset to allow probing
+                let overloaded_duration = now_ns.saturating_sub(host.overloaded_since_ns);
+                if recovery_ns > 0 && overloaded_duration > recovery_ns {
+                    log::info!(
+                        "adaptive_concurrency: host {} recovery timeout ({:.1}s), resetting overload status",
+                        addr,
+                        overloaded_duration as f64 / 1_000_000_000.0
+                    );
+                    host.is_overloaded = false;
+                    // Reset minRTT so it gets re-measured with fresh data
+                    host.min_rtt_ns = None;
+                    host.current_limit = self.config.initial_concurrency_limit;
+                    host.latency_samples.clear();
+                } else {
+                    self.overloaded_hosts.insert(addr.clone());
+                }
             }
         }
     }
 
-    /// Remove hosts not seen within the expiry window.
+    /// Compute an adaptive per-try timeout based on healthy host latencies.
+    /// Returns timeout in milliseconds, or 0 if not enough data.
+    pub fn compute_adaptive_timeout(&mut self) {
+        if self.overloaded_hosts.is_empty() {
+            self.adaptive_per_try_timeout_ms = 0;
+            return;
+        }
+
+        // Collect minRTT from healthy (non-overloaded) hosts
+        let healthy_rtts: Vec<u64> = self
+            .hosts
+            .iter()
+            .filter(|(addr, host)| !host.is_overloaded && host.min_rtt_ns.is_some() && !self.overloaded_hosts.contains(*addr))
+            .filter_map(|(_, host)| host.min_rtt_ns)
+            .collect();
+
+        if healthy_rtts.is_empty() {
+            // No healthy host data; use a generous fallback
+            self.adaptive_per_try_timeout_ms = 200;
+            return;
+        }
+
+        // Use the max of healthy minRTTs * multiplier as the timeout.
+        // This should be generous enough for healthy hosts but cause slow hosts to timeout.
+        let max_healthy_rtt = healthy_rtts.iter().copied().max().unwrap_or(0);
+        // Convert ns to ms and multiply by 3x for safety margin, minimum 50ms
+        let timeout_ms = (max_healthy_rtt / 1_000_000).saturating_mul(3).max(50);
+        self.adaptive_per_try_timeout_ms = timeout_ms;
+        log::info!(
+            "adaptive_concurrency: adaptive per-try timeout = {}ms (healthy maxRTT={}us, overloaded={})",
+            timeout_ms,
+            max_healthy_rtt / 1000,
+            self.overloaded_hosts.len()
+        );
+    }
+
     pub fn expire_stale_hosts(&mut self, now_ns: u64) {
         let expiry_ns = self.config.host_expiry_secs * 1_000_000_000;
         self.hosts.retain(|addr, host| {
@@ -239,5 +288,9 @@ impl SharedState {
 
     pub fn is_host_overloaded(&self, addr: &str) -> bool {
         self.overloaded_hosts.contains(addr)
+    }
+
+    pub fn has_overloaded_hosts(&self) -> bool {
+        !self.overloaded_hosts.is_empty()
     }
 }
