@@ -1,0 +1,130 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write          # create GitHub releases + upload assets
+  packages: write          # push OCI images to ghcr.io
+
+env:
+  WASM_FILE: target/wasm32-unknown-unknown/release/adaptive_concurrency_wasm.wasm
+  OCI_IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-
+
+      - name: Build WASM binary (release)
+        run: cargo build --target wasm32-unknown-unknown --release
+
+      - name: Compute SHA-256
+        id: sha
+        run: |
+          SHA=$(sha256sum ${{ env.WASM_FILE }} | awk '{print $1}')
+          echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "### WASM Binary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Size:** $(ls -lh ${{ env.WASM_FILE }} | awk '{print $5}')" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **SHA-256:** \`${SHA}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------------------------------------------------------------
+      # GitHub Release — .wasm binary as a downloadable asset
+      # ---------------------------------------------------------------
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: ${{ env.WASM_FILE }}
+          body: |
+            ## WASM Binary
+
+            **SHA-256:** `${{ steps.sha.outputs.sha256 }}`
+
+            ### Usage with Envoy Gateway (HTTP URL)
+
+            ```yaml
+            apiVersion: gateway.envoyproxy.io/v1alpha1
+            kind: EnvoyExtensionPolicy
+            metadata:
+              name: adaptive-concurrency
+            spec:
+              targetRefs:
+                - group: gateway.networking.k8s.io
+                  kind: HTTPRoute
+                  name: my-app
+              wasm:
+                - name: adaptive-concurrency
+                  rootID: adaptive_concurrency
+                  code:
+                    type: HTTP
+                    http:
+                      url: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/adaptive_concurrency_wasm.wasm
+                      sha256: "${{ steps.sha.outputs.sha256 }}"
+            ```
+
+            ### Usage with Envoy Gateway (OCI Image)
+
+            ```yaml
+            apiVersion: gateway.envoyproxy.io/v1alpha1
+            kind: EnvoyExtensionPolicy
+            metadata:
+              name: adaptive-concurrency
+            spec:
+              targetRefs:
+                - group: gateway.networking.k8s.io
+                  kind: HTTPRoute
+                  name: my-app
+              wasm:
+                - name: adaptive-concurrency
+                  rootID: adaptive_concurrency
+                  code:
+                    type: Image
+                    image:
+                      url: ${{ env.OCI_IMAGE }}:${{ github.ref_name }}
+            ```
+
+      # ---------------------------------------------------------------
+      # OCI Image — push WASM binary to ghcr.io as an OCI artifact
+      # ---------------------------------------------------------------
+      # Envoy Gateway can pull WASM from OCI registries directly.
+      # We use `oras` to push the raw .wasm file as an OCI artifact.
+      - name: Install oras
+        uses: oras-project/setup-oras@v1
+
+      - name: Log in to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Push WASM as OCI artifact
+        run: |
+          TAG="${{ github.ref_name }}"
+
+          # Push with the WASM media type that Envoy expects
+          oras push "${{ env.OCI_IMAGE }}:${TAG}" \
+            --artifact-type application/vnd.module.wasm.content.layer.v1+wasm \
+            "${{ env.WASM_FILE }}:application/wasm"
+
+          # Also tag as latest
+          oras tag "${{ env.OCI_IMAGE }}:${TAG}" latest
+
+          echo "### OCI Image" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Image:** \`${{ env.OCI_IMAGE }}:${TAG}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Also tagged:** \`${{ env.OCI_IMAGE }}:latest\`" >> "$GITHUB_STEP_SUMMARY"
