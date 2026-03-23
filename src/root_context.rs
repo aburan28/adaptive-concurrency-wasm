@@ -74,9 +74,7 @@ impl RootContext for AdaptiveConcurrencyRoot {
     }
 
     fn create_http_context(&self, _context_id: u32) -> Option<Box<dyn HttpContext>> {
-        Some(Box::new(AdaptiveConcurrencyHttp::new(
-            self.shared.clone(),
-        )))
+        Some(Box::new(AdaptiveConcurrencyHttp::new(self.shared.clone())))
     }
 
     fn get_type(&self) -> Option<ContextType> {

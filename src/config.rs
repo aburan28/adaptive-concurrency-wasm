@@ -52,20 +52,48 @@ pub struct PluginConfig {
     pub recovery_timeout_secs: u64,
 }
 
-fn default_initial_limit() -> u32 { 100 }
-fn default_min_limit() -> u32 { 3 }
-fn default_max_limit() -> u32 { 1000 }
-fn default_sample_window_size() -> usize { 250 }
-fn default_min_rtt_recalc_windows() -> u32 { 5 }
-fn default_min_rtt_buffer_pct() -> f64 { 0.25 }
-fn default_sample_percentile() -> f64 { 0.9 }
-fn default_max_gradient() -> f64 { 2.0 }
-fn default_tick_period_ms() -> u64 { 1000 }
-fn default_host_expiry_secs() -> u64 { 300 }
-fn default_overload_gradient_threshold() -> f64 { 0.7 }
-fn default_recovery_gradient_threshold() -> f64 { 0.95 }
-fn default_min_rtt_probe_count() -> usize { 25 }
-fn default_recovery_timeout_secs() -> u64 { 10 }
+fn default_initial_limit() -> u32 {
+    100
+}
+fn default_min_limit() -> u32 {
+    3
+}
+fn default_max_limit() -> u32 {
+    1000
+}
+fn default_sample_window_size() -> usize {
+    250
+}
+fn default_min_rtt_recalc_windows() -> u32 {
+    5
+}
+fn default_min_rtt_buffer_pct() -> f64 {
+    0.25
+}
+fn default_sample_percentile() -> f64 {
+    0.9
+}
+fn default_max_gradient() -> f64 {
+    2.0
+}
+fn default_tick_period_ms() -> u64 {
+    1000
+}
+fn default_host_expiry_secs() -> u64 {
+    300
+}
+fn default_overload_gradient_threshold() -> f64 {
+    0.7
+}
+fn default_recovery_gradient_threshold() -> f64 {
+    0.95
+}
+fn default_min_rtt_probe_count() -> usize {
+    25
+}
+fn default_recovery_timeout_secs() -> u64 {
+    10
+}
 
 impl Default for PluginConfig {
     fn default() -> Self {

@@ -59,7 +59,11 @@ impl HostState {
     }
 
     /// Recalculate the concurrency limit using Gradient2.
-    pub fn recalculate_limit(&mut self, config: &PluginConfig, now_ns: u64) -> Option<Gradient2Result> {
+    pub fn recalculate_limit(
+        &mut self,
+        config: &PluginConfig,
+        now_ns: u64,
+    ) -> Option<Gradient2Result> {
         if self.latency_samples.is_empty() {
             return None;
         }
@@ -71,7 +75,8 @@ impl HostState {
         let min_rtt = match self.min_rtt_ns {
             Some(rtt) => rtt,
             None => {
-                let baseline = gradient2::percentile(&self.latency_samples, config.sample_percentile);
+                let baseline =
+                    gradient2::percentile(&self.latency_samples, config.sample_percentile);
                 self.min_rtt_ns = Some(baseline);
                 baseline
             }
@@ -200,10 +205,7 @@ impl SharedState {
 
                 if host.should_start_probe(config.min_rtt_recalc_windows) {
                     host.start_min_rtt_probe();
-                    log::info!(
-                        "adaptive_concurrency: host {} starting minRTT probe",
-                        addr
-                    );
+                    log::info!("adaptive_concurrency: host {} starting minRTT probe", addr);
                 }
             }
         }

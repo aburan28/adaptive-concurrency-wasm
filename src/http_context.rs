@@ -53,10 +53,7 @@ impl HttpContext for AdaptiveConcurrencyHttp {
         let shared = self.shared.borrow();
         if shared.has_overloaded_hosts() && !shared.config.dry_run {
             // Tag requests so we can observe adaptive concurrency behavior
-            self.set_http_request_header(
-                "x-adaptive-concurrency-active",
-                Some("true"),
-            );
+            self.set_http_request_header("x-adaptive-concurrency-active", Some("true"));
         }
 
         Action::Continue
