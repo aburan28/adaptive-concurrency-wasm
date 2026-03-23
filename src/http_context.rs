@@ -49,26 +49,13 @@ impl HttpContext for AdaptiveConcurrencyHttp {
     fn on_http_request_headers(&mut self, _num_headers: usize, _end_of_stream: bool) -> Action {
         self.request_start_ns = self.now_ns();
 
-        // If any hosts are overloaded, inject a tight per-try timeout.
-        // This causes slow hosts to timeout quickly and get retried to a different host.
+        // Add informational headers about overloaded hosts.
         let shared = self.shared.borrow();
         if shared.has_overloaded_hosts() && !shared.config.dry_run {
-            let timeout_ms = shared.adaptive_per_try_timeout_ms;
-            if timeout_ms > 0 {
-                self.set_http_request_header(
-                    "x-envoy-upstream-rq-per-try-timeout-ms",
-                    Some(&timeout_ms.to_string()),
-                );
-                log::info!(
-                    "adaptive_concurrency: injecting per-try timeout {}ms (overloaded hosts: {})",
-                    timeout_ms,
-                    shared.overloaded_hosts.len()
-                );
-            }
-        } else if shared.has_overloaded_hosts() && shared.config.dry_run {
-            log::warn!(
-                "adaptive_concurrency: [DRY RUN] would inject per-try timeout (overloaded hosts: {})",
-                shared.overloaded_hosts.len()
+            // Tag requests so we can observe adaptive concurrency behavior
+            self.set_http_request_header(
+                "x-adaptive-concurrency-active",
+                Some("true"),
             );
         }
 
@@ -90,14 +77,15 @@ impl HttpContext for AdaptiveConcurrencyHttp {
         let mut shared = self.shared.borrow_mut();
         let host = shared.get_or_create_host(&addr, now);
 
-        // Record metrics — this is the only place we learn about the upstream host.
-        // Record both the request and its completion in one shot since we only
-        // discover the host at response time.
+        // Record latency metrics
         host.record_request_end(latency_ns, now);
         host.total_requests += 1;
 
-        // Track if this host is overloaded (for stats/logging)
-        if shared.is_host_overloaded(&addr) {
+        // Add response headers for observability
+        let is_overloaded = shared.is_host_overloaded(&addr);
+        if is_overloaded {
+            self.set_http_response_header("x-adaptive-concurrency-limited", Some("true"));
+            self.set_http_response_header("x-overloaded-host", Some(&addr));
             if let Some(host) = shared.hosts.get_mut(&addr) {
                 host.total_limited += 1;
             }
@@ -107,8 +95,6 @@ impl HttpContext for AdaptiveConcurrencyHttp {
     }
 
     fn on_log(&mut self) {
-        // on_log is called when the request is fully complete.
-        // We already recorded metrics in on_http_response_headers.
-        // This is a no-op but kept for completeness.
+        // No-op. Metrics already recorded in on_http_response_headers.
     }
 }

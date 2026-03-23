@@ -239,37 +239,44 @@ impl SharedState {
     }
 
     /// Compute an adaptive per-try timeout based on healthy host latencies.
-    /// Returns timeout in milliseconds, or 0 if not enough data.
+    /// Uses recent latency samples from non-overloaded hosts to set a timeout
+    /// that healthy hosts can comfortably meet but slow hosts will exceed.
     pub fn compute_adaptive_timeout(&mut self) {
         if self.overloaded_hosts.is_empty() {
             self.adaptive_per_try_timeout_ms = 0;
             return;
         }
 
-        // Collect minRTT from healthy (non-overloaded) hosts
-        let healthy_rtts: Vec<u64> = self
-            .hosts
-            .iter()
-            .filter(|(addr, host)| !host.is_overloaded && host.min_rtt_ns.is_some() && !self.overloaded_hosts.contains(*addr))
-            .filter_map(|(_, host)| host.min_rtt_ns)
-            .collect();
+        // Collect recent latency samples from healthy hosts
+        let mut healthy_samples: Vec<u64> = Vec::new();
+        for (addr, host) in self.hosts.iter() {
+            if !host.is_overloaded && !self.overloaded_hosts.contains(addr) {
+                healthy_samples.extend_from_slice(&host.latency_samples);
+            }
+        }
 
-        if healthy_rtts.is_empty() {
-            // No healthy host data; use a generous fallback
+        if healthy_samples.is_empty() {
+            // No recent samples; use a moderate fallback
             self.adaptive_per_try_timeout_ms = 200;
             return;
         }
 
-        // Use the max of healthy minRTTs * multiplier as the timeout.
-        // This should be generous enough for healthy hosts but cause slow hosts to timeout.
-        let max_healthy_rtt = healthy_rtts.iter().copied().max().unwrap_or(0);
-        // Convert ns to ms and multiply by 3x for safety margin, minimum 50ms
-        let timeout_ms = (max_healthy_rtt / 1_000_000).saturating_mul(3).max(50);
+        healthy_samples.sort_unstable();
+        // Use p95 of healthy samples as baseline, then 3x multiplier
+        let p95_idx = ((healthy_samples.len() as f64 * 0.95) as usize)
+            .min(healthy_samples.len().saturating_sub(1));
+        let healthy_p95_ns = healthy_samples[p95_idx];
+        // Convert to ms with 3x safety margin, minimum 50ms, maximum 500ms
+        let timeout_ms = (healthy_p95_ns / 1_000_000)
+            .saturating_mul(3)
+            .max(50)
+            .min(500);
         self.adaptive_per_try_timeout_ms = timeout_ms;
         log::info!(
-            "adaptive_concurrency: adaptive per-try timeout = {}ms (healthy maxRTT={}us, overloaded={})",
+            "adaptive_concurrency: adaptive per-try timeout = {}ms (healthy p95={}ms, {} samples, overloaded={})",
             timeout_ms,
-            max_healthy_rtt / 1000,
+            healthy_p95_ns / 1_000_000,
+            healthy_samples.len(),
             self.overloaded_hosts.len()
         );
     }

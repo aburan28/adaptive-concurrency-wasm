@@ -30,9 +30,10 @@ static_resources:
                             cluster: upstream_cluster
                             timeout: 30s
                             retry_policy:
-                              retry_on: "5xx"
+                              retry_on: "5xx,reset,connect-failure,retriable-status-codes"
                               num_retries: 3
-                              per_try_timeout: 10s
+                              per_try_timeout: 0.15s
+                              retriable_status_codes: [504]
                               retry_host_predicate:
                                 - name: envoy.retry_host_predicates.previous_hosts
                                   typed_config:
@@ -52,17 +53,17 @@ static_resources:
                               "initial_concurrency_limit": 100,
                               "min_concurrency_limit": 3,
                               "max_concurrency_limit": 1000,
-                              "sample_window_size": 25,
-                              "min_rtt_recalc_windows": 5,
+                              "sample_window_size": 5,
+                              "min_rtt_recalc_windows": 3,
                               "min_rtt_buffer_pct": 0.25,
                               "sample_percentile": 0.9,
                               "max_gradient": 2.0,
-                              "tick_period_ms": 500,
+                              "tick_period_ms": 250,
                               "host_expiry_secs": 300,
                               "overload_response_code": 503,
                               "overload_gradient_threshold": 0.7,
                               "recovery_gradient_threshold": 0.95,
-                              "min_rtt_probe_count": 10,
+                              "min_rtt_probe_count": 3,
                               "recovery_timeout_secs": 8,
                               "dry_run": false
                             }

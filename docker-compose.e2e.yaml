@@ -9,6 +9,7 @@ services:
       - "9901:9901"
     command: >
       envoy -c /etc/envoy/envoy.yaml
+      --concurrency 2
       --log-level info
       --component-log-level wasm:debug
     depends_on:
