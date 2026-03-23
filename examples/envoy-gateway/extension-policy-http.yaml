@@ -1,0 +1,33 @@
+# EnvoyExtensionPolicy — loads the WASM plugin from an HTTP URL.
+#
+# Option 2: HTTP URL (simpler for development / testing)
+# Host the .wasm file on any HTTP server or GitHub releases.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyExtensionPolicy
+metadata:
+  name: adaptive-concurrency
+  namespace: adaptive-concurrency
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: my-app
+  wasm:
+    - name: adaptive-concurrency
+      rootID: adaptive_concurrency
+      code:
+        type: HTTP
+        http:
+          url: https://github.com/yourorg/adaptive-concurrency-wasm/releases/download/v0.1.0/adaptive_concurrency_wasm.wasm
+          sha256: "replace-with-actual-sha256-of-your-wasm-binary"
+      config:
+        type: JSON
+        json:
+          initial_concurrency_limit: 100
+          sample_window_size: 250
+          sample_percentile: 0.9
+          tick_period_ms: 1000
+          overload_gradient_threshold: 0.7
+          recovery_gradient_threshold: 0.95
+          recovery_timeout_secs: 10
+          dry_run: false

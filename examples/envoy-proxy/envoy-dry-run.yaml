@@ -1,0 +1,96 @@
+# Envoy config with the adaptive concurrency WASM plugin in DRY RUN mode.
+#
+# In dry_run mode, the plugin:
+#   - Tracks per-host latency and computes gradients (same as normal)
+#   - Logs overloaded hosts and would-be enforcement actions
+#   - Does NOT inject per-try timeout headers
+#   - Does NOT modify any request/response behavior
+#
+# Use this to observe the plugin's detection behavior before enabling enforcement.
+# Check Envoy logs for lines like:
+#   adaptive_concurrency: [DRY RUN] would inject per-try timeout
+#   adaptive_concurrency: OVERLOADED host=...
+admin:
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 9901
+
+static_resources:
+  listeners:
+    - name: main
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 10000
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                codec_type: AUTO
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: upstream_cluster
+                            timeout: 30s
+                http_filters:
+                  - name: envoy.filters.http.wasm
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
+                      config:
+                        name: "adaptive_concurrency"
+                        root_id: "adaptive_concurrency"
+                        configuration:
+                          "@type": type.googleapis.com/google.protobuf.StringValue
+                          value: |
+                            {
+                              "initial_concurrency_limit": 100,
+                              "sample_window_size": 250,
+                              "sample_percentile": 0.9,
+                              "tick_period_ms": 1000,
+                              "overload_gradient_threshold": 0.7,
+                              "recovery_gradient_threshold": 0.95,
+                              "recovery_timeout_secs": 10,
+                              "dry_run": true
+                            }
+                        vm_config:
+                          runtime: "envoy.wasm.runtime.v8"
+                          code:
+                            local:
+                              filename: "/etc/envoy/plugin.wasm"
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    - name: upstream_cluster
+      connect_timeout: 5s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: upstream_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: backend-host-1
+                      port_value: 8080
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: backend-host-2
+                      port_value: 8080
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: backend-host-3
+                      port_value: 8080

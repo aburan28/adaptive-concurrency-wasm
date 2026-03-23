@@ -1,0 +1,42 @@
+# EnvoyExtensionPolicy — loads the adaptive concurrency WASM plugin.
+#
+# Option 1: OCI Image (recommended for production)
+# Push your WASM binary to a container registry, then reference it here.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyExtensionPolicy
+metadata:
+  name: adaptive-concurrency
+  namespace: adaptive-concurrency
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: my-app
+  wasm:
+    - name: adaptive-concurrency
+      rootID: adaptive_concurrency
+      code:
+        type: Image
+        image:
+          url: ghcr.io/yourorg/adaptive-concurrency-wasm:v0.1.0
+          # pullSecretRef:                    # uncomment for private registries
+          #   name: registry-credentials
+          # pullPolicy: IfNotPresent
+      config:
+        type: JSON
+        json:
+          initial_concurrency_limit: 100
+          min_concurrency_limit: 3
+          max_concurrency_limit: 1000
+          sample_window_size: 250
+          sample_percentile: 0.9
+          min_rtt_buffer_pct: 0.25
+          min_rtt_recalc_windows: 5
+          min_rtt_probe_count: 25
+          max_gradient: 2.0
+          tick_period_ms: 1000
+          host_expiry_secs: 300
+          overload_gradient_threshold: 0.7
+          recovery_gradient_threshold: 0.95
+          recovery_timeout_secs: 10
+          dry_run: false

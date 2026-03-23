@@ -1,0 +1,37 @@
+# BackendTrafficPolicy configures retry behavior and per-try timeout.
+#
+# This is CRITICAL for the adaptive concurrency plugin to work effectively:
+# - per-try timeout (150ms) causes slow hosts to time out quickly
+# - Envoy retries the request to a different host (avoiding the previous one)
+# - The plugin tracks per-host latency and computes the adaptive timeout
+#
+# Without this policy, slow hosts will still respond (just slowly) and the
+# client will wait for the full slow response.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: adaptive-concurrency-retry
+  namespace: adaptive-concurrency
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: my-app
+  retry:
+    numRetries: 3
+    perRetry:
+      timeout: 150ms
+      backOff:
+        baseInterval: 25ms
+        maxInterval: 250ms
+    retryOn:
+      httpStatusCodes:
+        - 503
+        - 504
+      triggers:
+        - connect-failure
+        - reset
+        - retriable-status-codes
+  timeout:
+    http:
+      requestTimeout: 30s

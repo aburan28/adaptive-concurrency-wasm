@@ -1,0 +1,47 @@
+# Example upstream application — replace with your own backend service.
+# This deploys 5 replicas to demonstrate per-host adaptive concurrency.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+  namespace: adaptive-concurrency
+  labels:
+    app: my-app
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+    spec:
+      containers:
+        - name: app
+          image: hashicorp/http-echo:latest
+          args:
+            - "-text=ok"
+            - "-listen=:8080"
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app
+  namespace: adaptive-concurrency
+spec:
+  selector:
+    app: my-app
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
