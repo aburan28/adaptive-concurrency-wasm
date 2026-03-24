@@ -1,2 +1,6 @@
-[build]
-target = "wasm32-unknown-unknown"
+# NOTE: No default target set here.
+# Build commands must specify --target explicitly:
+#   cargo build --target wasm32-unknown-unknown --release   (for WASM)
+#   cargo test                                              (for native tests)
+# This allows `cargo test` to work on the host target without
+# hitting proxy-wasm FFI linker errors.

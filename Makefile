@@ -12,9 +12,9 @@ build:
 	@ls -lh $(WASM_OUT)
 	@echo "WASM binary built: $(WASM_OUT)"
 
-# Run unit tests on native target (not wasm32)
+# Run unit tests on native host target
 test:
-	cargo test --target $$(rustc -vV | grep host | awk '{print $$2}')
+	cargo test
 
 clean:
 	cargo clean
