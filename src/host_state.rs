@@ -269,7 +269,9 @@ impl SharedState {
             .min(healthy_samples.len().saturating_sub(1));
         let healthy_p95_ns = healthy_samples[p95_idx];
         // Convert to ms with 3x safety margin, minimum 50ms, maximum 500ms
-        let timeout_ms = (healthy_p95_ns / 1_000_000).saturating_mul(3).clamp(50, 500);
+        let timeout_ms = (healthy_p95_ns / 1_000_000)
+            .saturating_mul(3)
+            .clamp(50, 500);
         self.adaptive_per_try_timeout_ms = timeout_ms;
         log::info!(
             "adaptive_concurrency: adaptive per-try timeout = {}ms (healthy p95={}ms, {} samples, overloaded={})",
