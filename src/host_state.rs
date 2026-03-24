@@ -363,6 +363,6 @@ impl SharedState {
         if period == 0 {
             return true; // fraction >= 1.0, shed everything
         }
-        self.request_counter % period == 0
+        self.request_counter.is_multiple_of(period)
     }
 }
