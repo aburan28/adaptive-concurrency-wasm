@@ -32,6 +32,10 @@ pub struct PluginConfig {
     #[serde(default = "default_host_expiry_secs")]
     pub host_expiry_secs: u64,
 
+    /// HTTP status code to return when shedding load (default: 503)
+    #[serde(default = "default_overload_response_code")]
+    pub overload_response_code: u32,
+
     #[serde(default)]
     pub dry_run: bool,
 
@@ -82,6 +86,9 @@ fn default_tick_period_ms() -> u64 {
 fn default_host_expiry_secs() -> u64 {
     300
 }
+fn default_overload_response_code() -> u32 {
+    503
+}
 fn default_overload_gradient_threshold() -> f64 {
     0.7
 }
@@ -108,6 +115,7 @@ impl Default for PluginConfig {
             max_gradient: default_max_gradient(),
             tick_period_ms: default_tick_period_ms(),
             host_expiry_secs: default_host_expiry_secs(),
+            overload_response_code: default_overload_response_code(),
             dry_run: false,
             overload_gradient_threshold: default_overload_gradient_threshold(),
             recovery_gradient_threshold: default_recovery_gradient_threshold(),

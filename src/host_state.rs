@@ -155,6 +155,11 @@ pub struct SharedState {
     /// Adaptive per-try timeout in ms, computed from healthy host latencies.
     /// 0 means no override (use Envoy's default).
     pub adaptive_per_try_timeout_ms: u64,
+    /// Fraction of incoming requests to shed (0.0 = none, 1.0 = all).
+    /// Proportional to the fraction of overloaded hosts in the cluster.
+    pub shed_fraction: f64,
+    /// Simple counter used as a deterministic shed decision source.
+    pub request_counter: u64,
     pub metrics: Option<PluginMetrics>,
 }
 
@@ -165,6 +170,8 @@ impl SharedState {
             hosts: HashMap::new(),
             overloaded_hosts: HashSet::new(),
             adaptive_per_try_timeout_ms: 0,
+            shed_fraction: 0.0,
+            request_counter: 0,
             metrics: None,
         }
     }
@@ -260,10 +267,20 @@ impl SharedState {
             }
         }
 
+        // Compute shed fraction: proportional to overloaded hosts in the cluster.
+        // If 1 of 5 hosts is overloaded, shed ~20% of requests.
+        let total = self.hosts.len();
+        let overloaded = self.overloaded_hosts.len();
+        self.shed_fraction = if total > 0 && overloaded > 0 {
+            overloaded as f64 / total as f64
+        } else {
+            0.0
+        };
+
         // Update gauges
         if let Some(ref m) = self.metrics {
-            m.set_tracked_hosts(self.hosts.len() as u64);
-            m.set_overloaded_hosts(self.overloaded_hosts.len() as u64);
+            m.set_tracked_hosts(total as u64);
+            m.set_overloaded_hosts(overloaded as u64);
         }
     }
 
@@ -330,5 +347,22 @@ impl SharedState {
 
     pub fn has_overloaded_hosts(&self) -> bool {
         !self.overloaded_hosts.is_empty()
+    }
+
+    /// Deterministic load shedding: returns true if this request should be
+    /// rejected with 503. Uses a counter-based approach (not random) so that
+    /// the shed rate converges exactly to `shed_fraction` over time.
+    pub fn should_shed_request(&mut self) -> bool {
+        if self.shed_fraction <= 0.0 {
+            return false;
+        }
+        self.request_counter = self.request_counter.wrapping_add(1);
+        // Shed every Nth request where N = 1/fraction.
+        // E.g. fraction=0.2 → shed every 5th request.
+        let period = (1.0 / self.shed_fraction).round() as u64;
+        if period == 0 {
+            return true; // fraction >= 1.0, shed everything
+        }
+        self.request_counter % period == 0
     }
 }
