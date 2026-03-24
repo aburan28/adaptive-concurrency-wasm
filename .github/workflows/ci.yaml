@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write    # needed to push tags on main
+  contents: read
 
 jobs:
   build-and-test:
@@ -55,23 +55,5 @@ jobs:
           path: target/wasm32-unknown-unknown/release/adaptive_concurrency_wasm.wasm
           retention-days: 7
 
-      # ------------------------------------------------------------------
-      # Auto-tag on push to main (skipped for PRs)
-      # Reads version from Cargo.toml and creates a tag if it doesn't exist.
-      # The tag push triggers the Release workflow.
-      # ------------------------------------------------------------------
-      - name: Tag release from Cargo.toml version
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        run: |
-          VERSION="v$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
-          echo "Detected version: ${VERSION}"
-
-          if git rev-parse "${VERSION}" >/dev/null 2>&1; then
-            echo "Tag ${VERSION} already exists — skipping."
-          else
-            echo "Creating and pushing tag ${VERSION}"
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git tag -a "${VERSION}" -m "Release ${VERSION}"
-            git push origin "${VERSION}"
-          fi
+      # Version bumping and tagging is handled by the version-bump workflow,
+      # which runs after CI passes on main.
