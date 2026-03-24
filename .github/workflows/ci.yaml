@@ -34,8 +34,8 @@ jobs:
       - name: Clippy
         run: cargo clippy --target wasm32-unknown-unknown -- -D warnings
 
-      - name: Unit tests
-        run: cargo test
+      - name: Unit tests (native target — wasm32 cannot run tests)
+        run: cargo test --target x86_64-unknown-linux-gnu
 
       - name: Build WASM binary
         run: cargo build --target wasm32-unknown-unknown --release
