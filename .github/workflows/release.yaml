@@ -1,9 +1,16 @@
 name: Release
 
 on:
+  # Triggered by tag push from CI workflow, or manual tag push
   push:
     tags:
       - "v*"
+  # Also triggered when CI completes on main — handles the case where
+  # GITHUB_TOKEN tag pushes don't trigger `push/tags` events.
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: write          # create GitHub releases + upload assets
@@ -16,15 +23,60 @@ env:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Only run if: (a) triggered by tag push, or (b) CI succeeded on main
+    if: >
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Determine the version tag to release
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            # Triggered by tag push — use the tag directly
+            TAG="${{ github.ref_name }}"
+          else
+            # Triggered by workflow_run — read version from Cargo.toml
+            TAG="v$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Releasing: ${TAG}"
+
+          # Check if this tag actually exists
+          if ! git rev-parse "${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} does not exist — skipping release."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Check if a release already exists for this tag
+      - name: Check existing release
+        if: steps.version.outputs.skip != 'true'
+        id: check
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists — skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Rust toolchain
+        if: steps.version.outputs.skip != 'true' && steps.check.outputs.skip != 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo
+        if: steps.version.outputs.skip != 'true' && steps.check.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -35,9 +87,11 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-release-
 
       - name: Build WASM binary (release)
+        if: steps.version.outputs.skip != 'true' && steps.check.outputs.skip != 'true'
         run: cargo build --target wasm32-unknown-unknown --release
 
       - name: Compute SHA-256
+        if: steps.version.outputs.skip != 'true' && steps.check.outputs.skip != 'true'
         id: sha
         run: |
           SHA=$(sha256sum ${{ env.WASM_FILE }} | awk '{print $1}')
@@ -50,8 +104,10 @@ jobs:
       # GitHub Release — .wasm binary as a downloadable asset
       # ---------------------------------------------------------------
       - name: Create GitHub Release
+        if: steps.version.outputs.skip != 'true' && steps.check.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
           generate_release_notes: true
           files: ${{ env.WASM_FILE }}
           body: |
@@ -77,7 +133,7 @@ jobs:
                   code:
                     type: HTTP
                     http:
-                      url: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/adaptive_concurrency_wasm.wasm
+                      url: https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/adaptive_concurrency_wasm.wasm
                       sha256: "${{ steps.sha.outputs.sha256 }}"
             ```
 
@@ -99,23 +155,24 @@ jobs:
                   code:
                     type: Image
                     image:
-                      url: ${{ env.OCI_IMAGE }}:${{ github.ref_name }}
+                      url: ${{ env.OCI_IMAGE }}:${{ steps.version.outputs.tag }}
             ```
 
       # ---------------------------------------------------------------
       # OCI Image — push WASM binary to ghcr.io as an OCI artifact
       # ---------------------------------------------------------------
-      # Envoy Gateway can pull WASM from OCI registries directly.
-      # We use `oras` to push the raw .wasm file as an OCI artifact.
       - name: Install oras
+        if: steps.version.outputs.skip != 'true' && steps.check.outputs.skip != 'true'
         uses: oras-project/setup-oras@v1
 
       - name: Log in to ghcr.io
+        if: steps.version.outputs.skip != 'true' && steps.check.outputs.skip != 'true'
         run: echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Push WASM as OCI artifact
+        if: steps.version.outputs.skip != 'true' && steps.check.outputs.skip != 'true'
         run: |
-          TAG="${{ github.ref_name }}"
+          TAG="${{ steps.version.outputs.tag }}"
 
           # Push with the WASM media type that Envoy expects
           oras push "${{ env.OCI_IMAGE }}:${TAG}" \
