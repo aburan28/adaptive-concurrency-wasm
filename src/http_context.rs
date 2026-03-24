@@ -69,6 +69,7 @@ impl HttpContext for AdaptiveConcurrencyHttp {
         };
 
         let latency_ns = now.saturating_sub(self.request_start_ns);
+        let latency_ms = latency_ns / 1_000_000;
         self.upstream_address = Some(addr.clone());
 
         let mut shared = self.shared.borrow_mut();
@@ -78,11 +79,20 @@ impl HttpContext for AdaptiveConcurrencyHttp {
         host.record_request_end(latency_ns, now);
         host.total_requests += 1;
 
+        // Emit Envoy stats
+        if let Some(ref m) = shared.metrics {
+            m.inc_requests_total();
+            m.record_request_latency_ms(latency_ms);
+        }
+
         // Add response headers for observability
         let is_overloaded = shared.is_host_overloaded(&addr);
         if is_overloaded {
             self.set_http_response_header("x-adaptive-concurrency-limited", Some("true"));
             self.set_http_response_header("x-overloaded-host", Some(&addr));
+            if let Some(ref m) = shared.metrics {
+                m.inc_overloaded_responses();
+            }
             if let Some(host) = shared.hosts.get_mut(&addr) {
                 host.total_limited += 1;
             }

@@ -2,6 +2,7 @@ mod config;
 mod gradient2;
 mod host_state;
 mod http_context;
+mod metrics;
 mod root_context;
 mod stats;
 

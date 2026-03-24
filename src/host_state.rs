@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::config::PluginConfig;
 use crate::gradient2::{self, Gradient2Params, Gradient2Result};
+use crate::metrics::PluginMetrics;
 
 /// Per-host concurrency state tracked by the plugin.
 pub struct HostState {
@@ -154,6 +155,7 @@ pub struct SharedState {
     /// Adaptive per-try timeout in ms, computed from healthy host latencies.
     /// 0 means no override (use Envoy's default).
     pub adaptive_per_try_timeout_ms: u64,
+    pub metrics: Option<PluginMetrics>,
 }
 
 impl SharedState {
@@ -163,6 +165,7 @@ impl SharedState {
             hosts: HashMap::new(),
             overloaded_hosts: HashSet::new(),
             adaptive_per_try_timeout_ms: 0,
+            metrics: None,
         }
     }
 
@@ -191,7 +194,12 @@ impl SharedState {
             // Recalculate limit if we have enough samples
             if host.has_enough_samples(config.sample_window_size) {
                 let old_limit = host.current_limit;
+                let was_overloaded = host.is_overloaded;
                 if let Some(result) = host.recalculate_limit(&config, now_ns) {
+                    if let Some(ref m) = self.metrics {
+                        m.inc_limit_recalculations();
+                        m.record_gradient(result.gradient);
+                    }
                     if old_limit != result.new_limit {
                         log::info!(
                             "adaptive_concurrency: host {} limit {} -> {} (gradient={:.3})",
@@ -200,6 +208,16 @@ impl SharedState {
                             result.new_limit,
                             result.gradient
                         );
+                    }
+                    // Detect state transitions
+                    if host.is_overloaded && !was_overloaded {
+                        if let Some(ref m) = self.metrics {
+                            m.inc_hosts_marked_overloaded();
+                        }
+                    } else if !host.is_overloaded && was_overloaded {
+                        if let Some(ref m) = self.metrics {
+                            m.inc_hosts_recovered();
+                        }
                     }
                 }
 
@@ -233,10 +251,19 @@ impl SharedState {
                     host.min_rtt_ns = None;
                     host.current_limit = self.config.initial_concurrency_limit;
                     host.latency_samples.clear();
+                    if let Some(ref m) = self.metrics {
+                        m.inc_recovery_timeouts();
+                    }
                 } else {
                     self.overloaded_hosts.insert(addr.clone());
                 }
             }
+        }
+
+        // Update gauges
+        if let Some(ref m) = self.metrics {
+            m.set_tracked_hosts(self.hosts.len() as u64);
+            m.set_overloaded_hosts(self.overloaded_hosts.len() as u64);
         }
     }
 
@@ -273,6 +300,9 @@ impl SharedState {
             .saturating_mul(3)
             .clamp(50, 500);
         self.adaptive_per_try_timeout_ms = timeout_ms;
+        if let Some(ref m) = self.metrics {
+            m.set_adaptive_timeout_ms(timeout_ms);
+        }
         log::info!(
             "adaptive_concurrency: adaptive per-try timeout = {}ms (healthy p95={}ms, {} samples, overloaded={})",
             timeout_ms,

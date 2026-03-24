@@ -8,6 +8,7 @@ use proxy_wasm::types::ContextType;
 use crate::config::PluginConfig;
 use crate::host_state::SharedState;
 use crate::http_context::AdaptiveConcurrencyHttp;
+use crate::metrics::PluginMetrics;
 use crate::stats;
 
 pub struct AdaptiveConcurrencyRoot {
@@ -58,7 +59,10 @@ impl RootContext for AdaptiveConcurrencyRoot {
         };
 
         let tick_ms = config.tick_period_ms;
-        self.shared.borrow_mut().config = config;
+        let mut shared = self.shared.borrow_mut();
+        shared.config = config;
+        shared.metrics = Some(PluginMetrics::new());
+        drop(shared);
         self.set_tick_period(Duration::from_millis(tick_ms));
         true
     }
