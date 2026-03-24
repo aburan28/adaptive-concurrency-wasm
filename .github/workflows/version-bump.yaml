@@ -1,0 +1,156 @@
+name: Version Bump
+
+# Runs after CI passes on main. Reads commit messages since the last tag
+# to determine the bump type (major/minor/patch) using conventional commits,
+# updates Cargo.toml, commits, and pushes a new tag — which triggers Release.
+#
+# Commit prefixes:
+#   feat:     → minor bump (0.2.0 → 0.3.0)
+#   fix:      → patch bump (0.2.0 → 0.2.1)
+#   perf:     → patch bump
+#   BREAKING CHANGE / feat!: / fix!:  → major bump (0.2.0 → 1.0.0)
+#   chore:/docs:/ci:/test:  → no bump (skip)
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Use a token that can trigger downstream workflows (push → tag → Release).
+          # GITHUB_TOKEN pushes do NOT trigger other workflows by design.
+          # If you want the tag push to trigger the Release workflow, create a
+          # Personal Access Token or GitHub App token and store it as a secret.
+          # Falls back to GITHUB_TOKEN (Release uses workflow_run as backup).
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Determine bump type from commits
+        id: bump
+        run: |
+          # Find the latest tag, or use initial commit if none
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)
+          echo "Last tag: ${LAST_TAG}"
+
+          # Collect commit subjects since last tag
+          COMMITS=$(git log "${LAST_TAG}..HEAD" --pretty=format:"%s" 2>/dev/null || echo "")
+          if [ -z "$COMMITS" ]; then
+            echo "No new commits since ${LAST_TAG}"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Commits since ${LAST_TAG}:"
+          echo "$COMMITS"
+
+          # Determine bump type
+          BUMP="none"
+          while IFS= read -r msg; do
+            # Check for breaking changes (highest priority)
+            if echo "$msg" | grep -qiE '^[a-z]+!:|BREAKING CHANGE'; then
+              BUMP="major"
+              break
+            fi
+            # feat → minor (if not already major)
+            if echo "$msg" | grep -qE '^feat(\(.+\))?:'; then
+              if [ "$BUMP" != "major" ]; then
+                BUMP="minor"
+              fi
+            fi
+            # fix/perf → patch (if nothing higher)
+            if echo "$msg" | grep -qE '^(fix|perf)(\(.+\))?:'; then
+              if [ "$BUMP" = "none" ]; then
+                BUMP="patch"
+              fi
+            fi
+          done <<< "$COMMITS"
+
+          echo "Bump type: ${BUMP}"
+
+          if [ "$BUMP" = "none" ]; then
+            echo "No version-relevant commits (chore/docs/ci/test only)"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "bump=${BUMP}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute new version
+        if: steps.bump.outputs.skip != 'true'
+        id: version
+        run: |
+          CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "Current version: ${CURRENT}"
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          BUMP="${{ steps.bump.outputs.bump }}"
+
+          case "$BUMP" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEW="${MAJOR}.${MINOR}.${PATCH}"
+          echo "New version: ${NEW} (${BUMP} bump)"
+          echo "new=${NEW}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${NEW}" >> "$GITHUB_OUTPUT"
+
+      - name: Check if tag already exists
+        if: steps.bump.outputs.skip != 'true'
+        id: check
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          if git rev-parse "${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists — skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update Cargo.toml version
+        if: steps.bump.outputs.skip != 'true' && steps.check.outputs.skip != 'true'
+        run: |
+          NEW="${{ steps.version.outputs.new }}"
+          sed -i "s/^version = \".*\"/version = \"${NEW}\"/" Cargo.toml
+          echo "Updated Cargo.toml to version ${NEW}"
+          grep '^version' Cargo.toml
+
+      - name: Update Cargo.lock
+        if: steps.bump.outputs.skip != 'true' && steps.check.outputs.skip != 'true'
+        run: |
+          # Install Rust just to update the lockfile
+          rustup default stable
+          cargo update --workspace
+        env:
+          CARGO_TERM_COLOR: always
+
+      - name: Commit and tag
+        if: steps.bump.outputs.skip != 'true' && steps.check.outputs.skip != 'true'
+        run: |
+          NEW="${{ steps.version.outputs.new }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          BUMP="${{ steps.bump.outputs.bump }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore: bump version to ${NEW} [${BUMP}]"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin main --follow-tags
+
+          echo "### Version Bump" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Bump type:** ${BUMP}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **New version:** ${NEW}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Tag:** ${TAG}" >> "$GITHUB_STEP_SUMMARY"
